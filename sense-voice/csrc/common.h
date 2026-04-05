@@ -482,6 +482,19 @@ struct sense_voice_model {
     // tensors
     int n_loaded;
     std::map<std::string, struct ggml_tensor *> tensors;
+
+    // model metadata (adapted from sherpa-onnx)
+    struct {
+        int32_t vocab_size = 25055;
+        int32_t blank_id = 0;
+        int32_t window_size = 7;
+        int32_t window_shift = 6;
+        int32_t with_itn_id = 14;
+        int32_t without_itn_id = 15;
+        std::map<std::string, int32_t> lang2id = {
+            {"auto", 0}, {"zh", 3}, {"en", 4}, {"yue", 7}, {"ja", 11}, {"ko", 12},
+        };
+    } meta_data;
 };
 
 struct sense_voice_context_params {

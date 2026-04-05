@@ -56,19 +56,20 @@ static ggml_backend_buffer_type_t sense_voice_default_buffer_type(const sense_vo
     return ggml_backend_cpu_buffer_type();
 }
 
-static ggml_backend_t sense_voice_backend_init_gpu(const sense_voice_context_params &params) {
-    ggml_backend_t result = nullptr;
+static std::vector<ggml_backend_t> sense_voice_backend_init_gpu(const sense_voice_context_params &params) {
+    std::vector<ggml_backend_t> result;
 
     if (params.use_gpu) {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
                 SENSE_VOICE_LOG_INFO("%s: using %s backend\n", __func__, ggml_backend_dev_name(dev));
-                ggml_backend_t result = ggml_backend_dev_init(dev, nullptr);
-                if (!result) {
+                ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+                if (!backend) {
                     SENSE_VOICE_LOG_ERROR("%s: failed to initialize %s backend\n", __func__, ggml_backend_dev_name(dev));
+                    continue;
                 }
-                return result;
+                result.push_back(backend);
             }
         }
     }
@@ -113,32 +114,43 @@ bool sense_voice_model_load(const char *path_model, sense_voice_context &sctx) {
     sense_voice.model_type = gguf_get_val_str(gguf_ctx, 0);
     // load hparams
     {
-        if (gguf_find_key(gguf_ctx, "general.file_type") != -1) {
-            hparams.ftype = gguf_get_val_u32(
-                    gguf_ctx, gguf_find_key(gguf_ctx, "general.file_type"));
+        int idx;
+
+        idx = gguf_find_key(gguf_ctx, "general.file_type");
+        if (idx >= 0) {
+            hparams.ftype = gguf_get_val_u32(gguf_ctx, idx);
         }
-        hparams.n_vocab = gguf_get_val_i32(
-                gguf_ctx, gguf_find_key(gguf_ctx, "tokenizer.vocab_size"));
-        hparams.n_encoder_hidden_state =
-                gguf_get_val_i32(gguf_ctx, gguf_find_key(gguf_ctx, "encoder.output_size"));
-        hparams.n_encoder_linear_units = gguf_get_val_i32(
-                gguf_ctx, gguf_find_key(gguf_ctx, "encoder.linear_units"));
-        hparams.n_encoder_attention_heads = gguf_get_val_i32(
-                gguf_ctx, gguf_find_key(gguf_ctx, "encoder.attention_heads"));
-        hparams.n_encoder_layers = gguf_get_val_i32(
-                gguf_ctx, gguf_find_key(gguf_ctx, "encoder.num_blocks"));
-        hparams.n_tp_encoder_layers = gguf_get_val_i32(
-                gguf_ctx, gguf_find_key(gguf_ctx, "encoder.tp_blocks"));
+
+        idx = gguf_find_key(gguf_ctx, "tokenizer.vocab_size");
+        if (idx >= 0) hparams.n_vocab = gguf_get_val_i32(gguf_ctx, idx);
+
+        idx = gguf_find_key(gguf_ctx, "encoder.output_size");
+        if (idx >= 0) hparams.n_encoder_hidden_state = gguf_get_val_i32(gguf_ctx, idx);
+
+        idx = gguf_find_key(gguf_ctx, "encoder.linear_units");
+        if (idx >= 0) hparams.n_encoder_linear_units = gguf_get_val_i32(gguf_ctx, idx);
+
+        idx = gguf_find_key(gguf_ctx, "encoder.attention_heads");
+        if (idx >= 0) hparams.n_encoder_attention_heads = gguf_get_val_i32(gguf_ctx, idx);
+
+        idx = gguf_find_key(gguf_ctx, "encoder.num_blocks");
+        if (idx >= 0) hparams.n_encoder_layers = gguf_get_val_i32(gguf_ctx, idx);
+
+        idx = gguf_find_key(gguf_ctx, "encoder.tp_blocks");
+        if (idx >= 0) hparams.n_tp_encoder_layers = gguf_get_val_i32(gguf_ctx, idx);
 
         if (sense_voice.model_type == "SenseVoiceLarge") {
-            hparams.n_decoder_hidden_state =
-                    gguf_get_val_i32(gguf_ctx, gguf_find_key(gguf_ctx, "model.inner_dim"));
-            hparams.n_decoder_linear_units = gguf_get_val_i32(
-                    gguf_ctx, gguf_find_key(gguf_ctx, "decoder.linear_units"));
-            hparams.n_decoder_attention_heads = gguf_get_val_i32(
-                    gguf_ctx, gguf_find_key(gguf_ctx, "decoder.attention_heads"));
-            hparams.n_decoder_layers = gguf_get_val_i32(
-                    gguf_ctx, gguf_find_key(gguf_ctx, "decoder.num_blocks"));
+            idx = gguf_find_key(gguf_ctx, "model.inner_dim");
+            if (idx >= 0) hparams.n_decoder_hidden_state = gguf_get_val_i32(gguf_ctx, idx);
+
+            idx = gguf_find_key(gguf_ctx, "decoder.linear_units");
+            if (idx >= 0) hparams.n_decoder_linear_units = gguf_get_val_i32(gguf_ctx, idx);
+
+            idx = gguf_find_key(gguf_ctx, "decoder.attention_heads");
+            if (idx >= 0) hparams.n_decoder_attention_heads = gguf_get_val_i32(gguf_ctx, idx);
+
+            idx = gguf_find_key(gguf_ctx, "decoder.num_blocks");
+            if (idx >= 0) hparams.n_decoder_layers = gguf_get_val_i32(gguf_ctx, idx);
         }
 
         // for the big tensors, we have the option to store the data in 16-bit
@@ -358,6 +370,10 @@ struct sense_voice_context *sense_voice_init_with_params_no_state(
         const char *path_model, sense_voice_context_params params) {
     ggml_time_init();
 
+#if defined(__APPLE__)
+    params.use_gpu = true;
+#endif
+
     SENSE_VOICE_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
     SENSE_VOICE_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
     SENSE_VOICE_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
@@ -395,10 +411,10 @@ static std::vector<ggml_backend_t> sense_voice_backend_init(
         const sense_voice_context_params &params) {
     std::vector<ggml_backend_t> result;
 
-    ggml_backend_t backend_gpu = sense_voice_backend_init_gpu(params);
+    std::vector<ggml_backend_t> backends_gpu = sense_voice_backend_init_gpu(params);
 
-    if (backend_gpu) {
-        result.push_back(backend_gpu);
+    for (auto &backend : backends_gpu) {
+        result.push_back(backend);
     }
 
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
@@ -974,4 +990,103 @@ void sense_voice_batch_print_output(struct sense_voice_context *ctx, bool need_p
         }
         if (!refresh_self) printf("\n");
     }
+}
+
+#if __ANDROID_API__ >= 9
+#include "android/asset_manager.h"
+#include "android/asset_manager_jni.h"
+
+struct sense_voice_context * sense_voice_small_init_from_android_asset(
+    AAssetManager *mgr, const char *path_model, struct sense_voice_context_params params) {
+    SENSE_VOICE_LOG_INFO("%s: loading model from Android asset '%s'\n", __func__, path_model);
+
+    auto ctx = sense_voice_small_init_from_file_with_params_no_state(path_model, params);
+    if (!ctx) {
+        return nullptr;
+    }
+
+    ctx->state = sense_voice_init_state(ctx);
+    return ctx;
+}
+#endif
+
+#if __OHOS__
+#include "rawfile/raw_file_manager.h"
+
+struct sense_voice_context * sense_voice_small_init_from_harmonyos_asset(
+    NativeResourceManager *mgr, const char *path_model, struct sense_voice_context_params params) {
+    SENSE_VOICE_LOG_INFO("%s: loading model from HarmonyOS asset '%s'\n", __func__, path_model);
+
+    auto ctx = sense_voice_small_init_from_file_with_params_no_state(path_model, params);
+    if (!ctx) {
+        return nullptr;
+    }
+
+    ctx->state = sense_voice_init_state(ctx);
+    return ctx;
+}
+#endif
+
+int sense_voice_run_features(struct sense_voice_context *ctx,
+                             const sense_voice_full_params &params,
+                             const std::vector<float> &features,
+                             int n_frames,
+                             int feat_dim,
+                             int language,
+                             int text_norm) {
+    if (!ctx || !ctx->state) {
+        SENSE_VOICE_LOG_ERROR("%s: context or state is null\n", __func__);
+        return -1;
+    }
+
+    auto state = ctx->state;
+
+    // Set up feature tensor
+    {
+        if (state->feature.ctx) {
+            ggml_free(state->feature.ctx);
+            state->feature.ctx = nullptr;
+        }
+        if (state->feature.buffer) {
+            ggml_backend_buffer_free(state->feature.buffer);
+            state->feature.buffer = nullptr;
+        }
+        state->feature.tensor = nullptr;
+
+        state->feature.n_len = n_frames;
+        state->feature.ctx = ggml_init({ggml_tensor_overhead(), nullptr, true});
+        state->feature.tensor = ggml_new_tensor_2d(state->feature.ctx,
+                                                    GGML_TYPE_F32,
+                                                    feat_dim,
+                                                    n_frames);
+        state->feature.buffer = ggml_backend_alloc_buffer(state->backends[0],
+                                                           ggml_nbytes(state->feature.tensor) + ggml_backend_get_alignment(state->backends[0]));
+        auto alloc = ggml_tallocr_new(state->feature.buffer);
+        ggml_tallocr_alloc(&alloc, state->feature.tensor);
+
+        ggml_backend_tensor_set(state->feature.tensor, features.data(), 0,
+                                n_frames * feat_dim * sizeof(float));
+    }
+
+    // Set language ID for embedding
+    int prev_lang_id = ctx->language_id;
+    ctx->language_id = language;
+    state->exp_n_audio_ctx = params.audio_ctx;
+
+    // Run encoder
+    if (!sense_voice_encode_internal(*ctx, *state, params.n_threads)) {
+        SENSE_VOICE_LOG_ERROR("%s: failed to encode\n", __func__);
+        ctx->language_id = prev_lang_id;
+        return -1;
+    }
+
+    // Run decoder
+    if (!sense_voice_decode_internal(*ctx, *state, params.n_threads)) {
+        SENSE_VOICE_LOG_ERROR("%s: failed to decode\n", __func__);
+        ctx->language_id = prev_lang_id;
+        return -1;
+    }
+
+    ctx->language_id = prev_lang_id;
+    return 0;
 }
